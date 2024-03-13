@@ -1,5 +1,6 @@
 import os
 import numpy as np
+from tqdm import tqdm
 
 import tensorflow as tf
 from tensorflow import keras
@@ -139,55 +140,82 @@ def deprocess_image(tensor, result_height, result_width):
 
 
 if __name__ == "__main__":
-    # Prepare content, stlye images
-    path = os.path.abspath(os.getcwd())
-    file1 = os.path.join("data", "dummy", "paris.jpg")
-    file2 = os.path.join("data", "dummy", "starry_night.jpg")
+    # Get data directory
+    cwd = os.path.abspath(os.getcwd())
+    data_dir = os.path.join(cwd, "data")
+    results_dir = os.path.join(cwd, "results")
 
-    print(path)
-    print(os.path.join(path, file1))
-    content_image_path = keras.utils.get_file(
-        os.path.join(path, file1), "https://i.imgur.com/F28w3Ac.jpg"
-    )
-    style_image_path = keras.utils.get_file(
-        os.path.join(path, file2), "https://i.imgur.com/9ooB60I.jpg"
-    )
-    result_height, result_width = get_result_image_size(
-        content_image_path, RESIZE_HEIGHT
-    )
-    print("result resolution: (%d, %d)" % (result_height, result_width))
+    # Get image paths
+    filter_jpgs = lambda x: [f for f in x if f.endswith(".jpg")]
+    content_images = filter_jpgs(os.listdir(os.path.join(data_dir, "content")))
+    style_images = filter_jpgs(os.listdir(os.path.join(data_dir, "style")))
 
-    # Preprocessing
-    content_tensor = preprocess_image(content_image_path, result_height, result_width)
-    style_tensor = preprocess_image(style_image_path, result_height, result_width)
-    generated_image = tf.Variable(
-        tf.random.uniform(style_tensor.shape, dtype=tf.dtypes.float32)
-    )
-    # generated_image = tf.Variable(preprocess_image(content_image_path, result_height, result_width))
+    for style_image in style_images:
+        for content_image in content_images:
 
-    # Build model
-    model = get_model()
-    optimizer = get_optimizer()
-    print(model.summary())
-
-    content_features = model(content_tensor)
-    style_features = model(style_tensor)
-
-    # Optimize result image
-    for iter in range(NUM_ITER):
-        with tf.GradientTape() as tape:
-            loss = compute_loss(
-                model, generated_image, content_features, style_features
+            # Load images
+            content_image_path = keras.utils.get_file(
+                os.path.join(data_dir, "content", content_image), origin=""
+            )
+            style_image_path = keras.utils.get_file(
+                os.path.join(data_dir, "style", style_image), origin=""
+            )
+            content_style_image = (
+                f"{style_image.split('.')[0]}_{content_image.split('.')[0]}"
             )
 
-        grads = tape.gradient(loss, generated_image)
+            # Compute resulting resolution
+            result_height, result_width = get_result_image_size(
+                content_image_path, RESIZE_HEIGHT
+            )
+            print(
+                f"Style: {style_image}, Content: {content_image} ({result_height}x{result_width})\n"
+            )
 
-        print("iter: %4d, loss: %8.f" % (iter, loss))
-        optimizer.apply_gradients([(grads, generated_image)])
+            # Preprocessing
+            content_tensor = preprocess_image(
+                content_image_path, result_height, result_width
+            )
+            style_tensor = preprocess_image(
+                style_image_path, result_height, result_width
+            )
+            generated_image = tf.Variable(
+                tf.random.uniform(style_tensor.shape, dtype=tf.dtypes.float32)
+            )
 
-        if (iter + 1) % 100 == 0:
-            name = "result/generated_at_iteration_%d.png" % (iter + 1)
-            save_result(generated_image, result_height, result_width, name)
+            # Build model
+            model = get_model()
+            optimizer = get_optimizer()
 
-    name = "result/result_%d_%f_%f.png" % (NUM_ITER, CONTENT_WEIGHT, STYLE_WEIGHT)
-    save_result(generated_image, result_height, result_width, name)
+            content_features = model(content_tensor)
+            style_features = model(style_tensor)
+
+            # Create save directory
+            save_dir = os.path.join(results_dir, content_style_image)
+            os.makedirs(results_dir, exist_ok=True)
+
+            # Optimize result image
+            desc = f"Synthesising {content_style_image}.png (Loss: {0:.2f})"
+            progress_bar = tqdm(range(NUM_ITER), total=NUM_ITER, desc=desc)
+            for i in progress_bar:
+                with tf.GradientTape() as tape:
+                    loss = compute_loss(
+                        model, generated_image, content_features, style_features
+                    )
+
+                grads = tape.gradient(loss, generated_image)
+
+                progress_bar.set_description(
+                    f"Synthesising {content_style_image} (Loss: {loss:.2f})"
+                )
+                optimizer.apply_gradients([(grads, generated_image)])
+
+                if (i + 1) % 100 == 0:
+                    filename = f"{str(i+1).zfill(4)}.png"
+                    save_path = os.path.join(save_dir, filename)
+                    save_result(generated_image, result_height, result_width, save_path)
+
+            # Save final result
+            filename = f"{content_style_image}.png"
+            save_path = os.path.join(save_dir, filename)
+            save_result(generated_image, result_height, result_width, save_path)
